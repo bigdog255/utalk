@@ -18,6 +18,14 @@ export class VapiController {
     const phone = message?.call?.customer?.number ?? '';
     const vapiCallId = message?.call?.id ?? '';
 
+    this.logger.log(`Webhook received: type=${type ?? 'unknown'} callId=${vapiCallId}`);
+
+    // Log function call details for debugging
+    if (type === 'function-call') {
+      const fnName = message?.functionCall?.name ?? 'unknown';
+      this.logger.log(`Function call: ${fnName} params=${JSON.stringify(message?.functionCall?.parameters ?? {})}`);
+    }
+
     try {
       switch (type) {
         case 'assistant-request':
@@ -34,7 +42,14 @@ export class VapiController {
         case 'function-call':
           return await this.vapiService.handleFunctionCall(message);
 
+        // Vapi may also send tool-calls in newer API versions
+        case 'tool-calls': {
+          this.logger.log('Received tool-calls type — routing as function-call');
+          return await this.vapiService.handleFunctionCall(message);
+        }
+
         default:
+          this.logger.log(`Unhandled webhook type: ${type}`);
           return { received: true };
       }
     } catch (err) {

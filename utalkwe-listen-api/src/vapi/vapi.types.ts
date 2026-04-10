@@ -80,11 +80,18 @@ export interface AssistantModel {
   tools?: AssistantTool[];
 }
 
+export interface AssistantServerConfig {
+  url: string;
+  secret?: string;
+}
+
 export interface AssistantConfig {
   name: string;
   firstMessage: string;
   model: AssistantModel;
   voice: AssistantVoice;
+  serverUrl?: string;
+  server?: AssistantServerConfig;
   maxDurationSeconds: number;
   silenceTimeoutSeconds: number;
   endCallMessage?: string;

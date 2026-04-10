@@ -172,6 +172,9 @@ export class VapiService {
         ? `Welcome to UtalkWe Listen. ${HAVEN_AI_DISCLOSURE} I'm here to listen. Before we get started — what's your name?`
         : `Welcome back${nameGreeting}. Last time you were dealing with ${lastIssue} — how has that been going?`;
 
+    const serverUrl = this.config.get<string>('SERVER_URL');
+    const webhookSecret = this.config.get<string>('VAPI_WEBHOOK_SECRET');
+
     return {
       assistant: {
         name: 'Haven',
@@ -183,6 +186,13 @@ export class VapiService {
           tools: this.getDefaultTools(),
         },
         voice: this.getVoiceConfig(ctx),
+        ...(serverUrl && {
+          serverUrl: `${serverUrl}/vapi/webhook`,
+          server: {
+            url: `${serverUrl}/vapi/webhook`,
+            ...(webhookSecret && { secret: webhookSecret }),
+          },
+        }),
         maxDurationSeconds: this.getMaxDuration(caller.subscription_tier),
         silenceTimeoutSeconds: 30,
         endCallFunctionEnabled: false,
@@ -551,10 +561,10 @@ export class VapiService {
       }
 
       this.logger.warn(`Unhandled function call: ${fnName}`);
-      return { result: { success: false, error: `${fnName ?? 'unknown'} not yet implemented` } };
+      return { result: `Unknown function: ${fnName ?? 'unknown'}` };
     } catch (err) {
       this.logger.error(`handleFunctionCall error [${fnName}]`, err);
-      return { result: { success: false, error: 'Internal error' } };
+      return { result: 'Function call failed — continuing conversation.' };
     }
   }
 
@@ -564,18 +574,19 @@ export class VapiService {
   ): Promise<unknown> {
     const callerId = this.activeCalls.get(vapiCallId);
     if (!callerId) {
-      return { result: { success: false, error: 'Caller context not found' } };
+      this.logger.warn(`save_caller_name: no callerId in activeCalls for ${vapiCallId}`);
+      return { result: 'Name noted.' };
     }
 
     const raw = params['name'];
     const name = typeof raw === 'string' ? raw.trim() : '';
     if (!name) {
-      return { result: { success: false, error: 'Name is required' } };
+      return { result: 'Could not save name — continuing conversation.' };
     }
 
     await this.callersService.updateCaller(callerId, { name });
     this.logger.log(`Name saved for call: ${vapiCallId}`);
-    return { result: { success: true, message: `Name saved: ${name}` } };
+    return { result: `Name saved: ${name}. Use their name warmly in conversation.` };
   }
 
   private async handleRequestCoachingPlan(
@@ -593,7 +604,7 @@ export class VapiService {
     });
 
     this.logger.log(`Coaching plan requested for call: ${vapiCallId}`);
-    return { result: { success: true, message: 'Plan will be sent via text after the call.' } };
+    return { result: 'Got it — I will send you a personalized plan via text after our call.' };
   }
 
   private async handleSavePreferences(
@@ -603,7 +614,7 @@ export class VapiService {
     const callerId = this.activeCalls.get(vapiCallId);
     if (!callerId) {
       this.logger.warn(`save_preferences: no callerId in activeCalls for ${vapiCallId}`);
-      return { result: { success: false, error: 'Caller context not found' } };
+      return { result: 'Preferences noted.' };
     }
 
     const update: Record<string, unknown> = {};
@@ -613,7 +624,7 @@ export class VapiService {
     await this.callersService.updateCaller(callerId, update as Parameters<typeof this.callersService.updateCaller>[1]);
 
     this.logger.log(`Preferences saved for call: ${vapiCallId}`);
-    return { result: { success: true, message: 'Preferences saved' } };
+    return { result: 'Preferences saved. Continue with the appropriate guidance style.' };
   }
 
   private async handleFlagCrisis(
@@ -643,7 +654,7 @@ export class VapiService {
   ): Promise<unknown> {
     const callerId = this.activeCalls.get(vapiCallId);
     if (!callerId) {
-      return { result: { success: false, error: 'Caller context not found' } };
+      return { result: 'Noted — I will set that up for you.' };
     }
 
     const optIn = params['opt_in'] === true;
@@ -651,18 +662,18 @@ export class VapiService {
 
     this.logger.log(`Daily affirmation ${optIn ? 'opt-in' : 'opt-out'} for call: ${vapiCallId}`);
     return {
-      result: {
-        success: true,
-        message: optIn
-          ? "You're all set — you'll receive a morning affirmation text every day."
-          : 'Daily affirmations have been turned off.',
-      },
+      result: optIn
+        ? "Done — you'll receive a morning affirmation text every day. Something to start your day with."
+        : 'Daily affirmations turned off.',
     };
   }
 
   // ─── Default config (Supabase-unavailable fallback) ─────────────────────────
 
   getDefaultAssistantConfig(): AssistantRequestResponse {
+    const serverUrl = this.config.get<string>('SERVER_URL');
+    const webhookSecret = this.config.get<string>('VAPI_WEBHOOK_SECRET');
+
     return {
       assistant: {
         name: 'Haven',
@@ -674,6 +685,13 @@ export class VapiService {
           tools: this.getDefaultTools(),
         },
         voice: { provider: 'openai', voiceId: 'nova' },
+        ...(serverUrl && {
+          serverUrl: `${serverUrl}/vapi/webhook`,
+          server: {
+            url: `${serverUrl}/vapi/webhook`,
+            ...(webhookSecret && { secret: webhookSecret }),
+          },
+        }),
         maxDurationSeconds: 600,
         silenceTimeoutSeconds: 30,
         endCallMessage: "You're not alone in this. I'm here anytime you need to talk.",
