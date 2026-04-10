@@ -47,6 +47,16 @@ export class CallersService {
     return data as Caller;
   }
 
+  async findAffirmationOptedIn(): Promise<Caller[]> {
+    const { data, error } = await this.supabase
+      .from('callers')
+      .select('*')
+      .eq('daily_affirmation_opt_in', true);
+
+    if (error) throw error;
+    return (data ?? []) as Caller[];
+  }
+
   async findByPhone(phone: string): Promise<Caller | null> {
     const { data, error } = await this.supabase
       .from('callers')
