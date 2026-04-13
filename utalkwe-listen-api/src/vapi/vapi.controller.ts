@@ -18,7 +18,13 @@ export class VapiController {
     const phone = message?.call?.customer?.number ?? '';
     const vapiCallId = message?.call?.id ?? '';
 
-    this.logger.log(`Webhook received: type=${type ?? 'unknown'} callId=${vapiCallId}`);
+    this.logger.log(`Webhook received: type=${type ?? 'unknown'} callId=${vapiCallId} phone=${phone || 'EMPTY'}`);
+
+    // Log raw call structure for end-of-call-report debugging
+    if (type === 'end-of-call-report') {
+      this.logger.log(`end-of-call-report call keys: ${JSON.stringify(Object.keys(message?.call ?? {}))}`);
+      this.logger.log(`end-of-call-report customer: ${JSON.stringify(message?.call?.customer ?? 'MISSING')}`);
+    }
 
     // Log function call details for debugging
     if (type === 'function-call') {

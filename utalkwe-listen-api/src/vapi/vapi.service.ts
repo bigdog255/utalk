@@ -136,6 +136,25 @@ export class VapiService {
     private readonly config: ConfigService,
   ) {}
 
+  // ─── Resolve callerId — in-memory map first, then DB fallback ───────────────
+
+  private async resolveCallerId(vapiCallId: string): Promise<string | null> {
+    // Fast path: in-memory map
+    const cached = this.activeCalls.get(vapiCallId);
+    if (cached) return cached;
+
+    // DB fallback: look up the session (handles process restarts / redeploys)
+    const session = await this.callersService.getSessionByVapiCallId(vapiCallId);
+    if (session) {
+      this.activeCalls.set(vapiCallId, session.caller_id);
+      this.logger.log(`resolveCallerId: recovered ${vapiCallId} from DB`);
+      return session.caller_id;
+    }
+
+    this.logger.warn(`resolveCallerId: no callerId found for ${vapiCallId}`);
+    return null;
+  }
+
   // ─── assistant-request ──────────────────────────────────────────────────────
 
   async buildDynamicAssistant(
@@ -461,17 +480,25 @@ export class VapiService {
 
   private async processPostCall(vapiCallId: string, message: VapiMessage): Promise<void> {
     try {
-      let callerId = this.activeCalls.get(vapiCallId);
-      const callerPhone = message.call?.customer?.number ?? '';
+      const rawPhone = message.call?.customer?.number;
+      const callerPhone = rawPhone ? this.callersService.normalizePhone(rawPhone) : '';
 
-      // Resolve callerId — Map hit is fastest; fall back to DB on process restart
-      if (!callerId) {
-        const session = await this.callersService.getSessionByVapiCallId(vapiCallId);
-        if (!session) {
-          this.logger.warn(`processPostCall: no session for ${vapiCallId}`);
-          return;
+      this.logger.log(`processPostCall: vapiCallId=${vapiCallId} rawPhone=${rawPhone ?? 'EMPTY'} normalizedPhone=${callerPhone || 'EMPTY'}`);
+
+      let callerId = await this.resolveCallerId(vapiCallId);
+
+      // Last resort: look up by phone
+      if (!callerId && callerPhone) {
+        const caller = await this.callersService.findByPhone(callerPhone);
+        if (caller) {
+          callerId = caller.id;
+          this.logger.log(`processPostCall: resolved callerId from phone ${this.callersService.maskPhone(callerPhone)}`);
         }
-        callerId = session.caller_id;
+      }
+
+      if (!callerId) {
+        this.logger.error(`processPostCall: CANNOT resolve callerId for ${vapiCallId} — no SMS will be sent`);
+        return;
       }
 
       // Fetch session state before update (was_crisis may have been set by handleFlagCrisis)
@@ -506,23 +533,54 @@ export class VapiService {
         return;
       }
 
-      // Coaching plan path — only if request_coaching_plan was called (issue_category set)
-      if (currentSession?.issue_category && callerPhone) {
-        await this.runCoachingPipeline(callerId, callerPhone, currentSession);
-      } else if (callerPhone) {
-        // General follow-up SMS for every substantive call (service communication)
-        const caller = await this.callersService.findById(callerId);
-        await this.smsService.sendCallFollowUp(
-          callerId,
-          callerPhone,
-          caller?.name ?? null,
-          currentSession?.issue_summary ?? summary?.slice(0, 200) ?? null,
-        );
+      // SMS decision
+      this.logger.log(
+        `SMS decision: callerPhone=${callerPhone || 'EMPTY'} ` +
+        `issue_category=${currentSession?.issue_category ?? 'NONE'} ` +
+        `was_crisis=${currentSession?.was_crisis ?? false}`,
+      );
+
+      if (!callerPhone) {
+        this.logger.error(`NO PHONE NUMBER — cannot send SMS for ${vapiCallId}. Attempting phone lookup from caller record.`);
+        // Last resort: get phone from caller record
+        const callerRecord = await this.callersService.findById(callerId);
+        if (callerRecord?.phone) {
+          const fallbackPhone = callerRecord.phone;
+          this.logger.log(`Recovered phone from caller record: ${this.callersService.maskPhone(fallbackPhone)}`);
+          await this.sendPostCallSms(callerId, fallbackPhone, currentSession, summary);
+        } else {
+          this.logger.error(`Cannot recover phone — no SMS will be sent for ${vapiCallId}`);
+        }
+      } else {
+        await this.sendPostCallSms(callerId, callerPhone, currentSession, summary);
       }
 
       this.logger.log(`Post-call complete: ${vapiCallId}`);
     } catch (err) {
       this.logger.error(`Post-call failed for ${vapiCallId}`, err);
+    }
+  }
+
+  private async sendPostCallSms(
+    callerId: string,
+    phone: string,
+    session: import('../callers/callers.types').CallSession | null,
+    summary: string | null,
+  ): Promise<void> {
+    // Coaching plan path — only if request_coaching_plan was called (issue_category set)
+    if (session?.issue_category) {
+      this.logger.log(`Sending coaching plan SMS to ${this.callersService.maskPhone(phone)}`);
+      await this.runCoachingPipeline(callerId, phone, session);
+    } else {
+      // General follow-up SMS for every substantive call
+      this.logger.log(`Sending general follow-up SMS to ${this.callersService.maskPhone(phone)}`);
+      const caller = await this.callersService.findById(callerId);
+      await this.smsService.sendCallFollowUp(
+        callerId,
+        phone,
+        caller?.name ?? null,
+        session?.issue_summary ?? summary?.slice(0, 200) ?? null,
+      );
     }
   }
 
@@ -592,9 +650,9 @@ export class VapiService {
     vapiCallId: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const callerId = this.activeCalls.get(vapiCallId);
+    const callerId = await this.resolveCallerId(vapiCallId);
     if (!callerId) {
-      this.logger.warn(`save_caller_name: no callerId in activeCalls for ${vapiCallId}`);
+      this.logger.warn(`save_caller_name: could not resolve callerId for ${vapiCallId}`);
       return { result: 'Name noted.' };
     }
 
@@ -631,9 +689,9 @@ export class VapiService {
     vapiCallId: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const callerId = this.activeCalls.get(vapiCallId);
+    const callerId = await this.resolveCallerId(vapiCallId);
     if (!callerId) {
-      this.logger.warn(`save_preferences: no callerId in activeCalls for ${vapiCallId}`);
+      this.logger.warn(`save_preferences: could not resolve callerId for ${vapiCallId}`);
       return { result: 'Preferences noted.' };
     }
 
@@ -672,7 +730,7 @@ export class VapiService {
     vapiCallId: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const callerId = this.activeCalls.get(vapiCallId);
+    const callerId = await this.resolveCallerId(vapiCallId);
     if (!callerId) {
       return { result: 'Noted — I will set that up for you.' };
     }

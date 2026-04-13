@@ -26,7 +26,19 @@ export class CallersService {
     );
   }
 
-  // ─── Phone masking ──────────────────────────────────────────────────────────
+  // ─── Phone normalization & masking ───────────────────────────────────────────
+
+  /**
+   * Normalize phone to E.164 format: +1XXXXXXXXXX
+   * Handles: +12125551234, 12125551234, 2125551234, (212) 555-1234
+   */
+  normalizePhone(phone: string): string {
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length === 10) return `+1${digits}`;
+    if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+    if (phone.startsWith('+')) return phone;
+    return `+${digits}`;
+  }
 
   maskPhone(phone: string): string {
     if (phone.length < 7) return '***';
@@ -58,10 +70,11 @@ export class CallersService {
   }
 
   async findByPhone(phone: string): Promise<Caller | null> {
+    const normalized = this.normalizePhone(phone);
     const { data, error } = await this.supabase
       .from('callers')
       .select('*')
-      .eq('phone', phone)
+      .eq('phone', normalized)
       .single();
 
     if (error?.code === 'PGRST116') return null; // not found
@@ -70,9 +83,10 @@ export class CallersService {
   }
 
   async createCaller(phone: string): Promise<Caller> {
+    const normalized = this.normalizePhone(phone);
     const { data, error } = await this.supabase
       .from('callers')
-      .insert({ phone })
+      .insert({ phone: normalized })
       .select()
       .single();
 
