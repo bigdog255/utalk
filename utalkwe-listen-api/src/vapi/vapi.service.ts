@@ -705,16 +705,63 @@ export class VapiService {
   // ─── function-call ──────────────────────────────────────────────────────────
 
   async handleFunctionCall(message: VapiMessage): Promise<unknown> {
-    const fnName = message.functionCall?.name;
-    const params = message.functionCall?.parameters ?? {};
     const vapiCallId = message.call?.id ?? '';
     const rawPhone = message.call?.customer?.number ?? '';
     const phone = rawPhone ? this.callersService.normalizePhone(rawPhone) : '';
 
-    this.logger.log(
-      `Function call: ${fnName ?? 'unknown'} vapiCallId=${vapiCallId} phone=${phone || 'EMPTY'}`,
-    );
+    // ─── Newer Vapi tool-calls format ─────────────────────────────────────────
+    // Can appear under toolCalls, toolCallList, or toolWithToolCallList
+    const toolCalls =
+      message.toolCallList ??
+      message.toolCalls ??
+      message.toolWithToolCallList?.map(t => t.toolCall) ??
+      null;
 
+    if (toolCalls && toolCalls.length > 0) {
+      this.logger.log(`Tool calls received: ${toolCalls.length}`);
+      const results = await Promise.all(
+        toolCalls.map(async tc => {
+          const fnName = tc.function?.name ?? 'unknown';
+          const args =
+            typeof tc.function?.arguments === 'string'
+              ? this.safeJsonParse(tc.function.arguments)
+              : tc.function?.arguments ?? {};
+
+          this.logger.log(`Tool call: ${fnName} id=${tc.id} args=${JSON.stringify(args)}`);
+
+          const resultString = await this.dispatchFunction(fnName, vapiCallId, phone, args);
+          return { toolCallId: tc.id, result: resultString };
+        }),
+      );
+      return { results };
+    }
+
+    // ─── Legacy function-call format ──────────────────────────────────────────
+    const fnName = message.functionCall?.name ?? 'unknown';
+    const params = message.functionCall?.parameters ?? {};
+
+    this.logger.log(`Function call (legacy): ${fnName} vapiCallId=${vapiCallId} phone=${phone || 'EMPTY'}`);
+
+    const resultString = await this.dispatchFunction(fnName, vapiCallId, phone, params);
+    return { result: resultString };
+  }
+
+  private safeJsonParse(s: string): Record<string, unknown> {
+    try {
+      return JSON.parse(s) as Record<string, unknown>;
+    } catch {
+      this.logger.warn(`safeJsonParse failed: ${s.slice(0, 100)}`);
+      return {};
+    }
+  }
+
+  /** Single dispatch point — returns a plain string result */
+  private async dispatchFunction(
+    fnName: string,
+    vapiCallId: string,
+    phone: string,
+    params: Record<string, unknown>,
+  ): Promise<string> {
     try {
       if (fnName === 'save_caller_name') {
         return await this.handleSaveCallerName(vapiCallId, phone, params);
@@ -731,12 +778,11 @@ export class VapiService {
       if (fnName === 'opt_in_daily_affirmation') {
         return await this.handleDailyAffirmationOptIn(vapiCallId, phone, params);
       }
-
       this.logger.warn(`Unhandled function call: ${fnName}`);
-      return { result: `Unknown function: ${fnName ?? 'unknown'}` };
+      return `Unknown function: ${fnName}`;
     } catch (err) {
-      this.logger.error(`handleFunctionCall error [${fnName}]`, err);
-      return { result: 'Function call failed — continuing conversation.' };
+      this.logger.error(`dispatchFunction error [${fnName}]`, err);
+      return 'Function call failed — continuing conversation.';
     }
   }
 
@@ -772,18 +818,18 @@ export class VapiService {
     vapiCallId: string,
     phone: string,
     params: Record<string, unknown>,
-  ): Promise<unknown> {
+  ): Promise<string> {
     const raw = params['name'];
     const name = typeof raw === 'string' ? raw.trim() : '';
     if (!name) {
       this.logger.warn(`save_caller_name: no name in params`);
-      return { result: 'Could not save name — continuing conversation.' };
+      return 'Could not save name — continuing conversation.';
     }
 
     const callerId = await this.resolveCallerIdWithPhone(vapiCallId, phone);
     if (!callerId) {
       this.logger.error(`save_caller_name: CANNOT resolve callerId for ${vapiCallId} — name "${name}" NOT saved`);
-      return { result: `Nice to meet you, ${name}.` };
+      return `Nice to meet you, ${name}.`;
     }
 
     try {
@@ -793,13 +839,13 @@ export class VapiService {
       this.logger.error(`save_caller_name: DB update failed for callerId=${callerId}`, err);
     }
 
-    return { result: `Name saved: ${name}. Use their name warmly in conversation.` };
+    return `Name saved: ${name}. Use their name warmly in conversation.`;
   }
 
   private async handleRequestCoachingPlan(
     vapiCallId: string,
     params: Record<string, unknown>,
-  ): Promise<unknown> {
+  ): Promise<string> {
     const issueCategory = typeof params['issue_category'] === 'string' ? params['issue_category'] : null;
     const issueSummary = typeof params['issue_summary'] === 'string' ? params['issue_summary'] : null;
     const callerMood = typeof params['mood'] === 'string' ? params['mood'] : null;
@@ -811,18 +857,18 @@ export class VapiService {
     });
 
     this.logger.log(`Coaching plan requested for call: ${vapiCallId}`);
-    return { result: 'Got it — I will send you a personalized plan via text after our call.' };
+    return 'Got it — I will send you a personalized plan via text after our call.';
   }
 
   private async handleSavePreferences(
     vapiCallId: string,
     phone: string,
     params: Record<string, unknown>,
-  ): Promise<unknown> {
+  ): Promise<string> {
     const callerId = await this.resolveCallerIdWithPhone(vapiCallId, phone);
     if (!callerId) {
       this.logger.warn(`save_preferences: could not resolve callerId for ${vapiCallId}`);
-      return { result: 'Preferences noted.' };
+      return 'Preferences noted.';
     }
 
     const update: Record<string, unknown> = {};
@@ -832,13 +878,13 @@ export class VapiService {
     await this.callersService.updateCaller(callerId, update as Parameters<typeof this.callersService.updateCaller>[1]);
 
     this.logger.log(`Preferences saved for call: ${vapiCallId}`);
-    return { result: 'Preferences saved. Continue with the appropriate guidance style.' };
+    return 'Preferences saved. Continue with the appropriate guidance style.';
   }
 
   private async handleFlagCrisis(
     vapiCallId: string,
     params: Record<string, unknown>,
-  ): Promise<unknown> {
+  ): Promise<string> {
     const severity = typeof params['severity'] === 'string' ? params['severity'] : 'unknown';
     const indicator = typeof params['indicator'] === 'string' ? params['indicator'] : 'unspecified';
 
@@ -853,28 +899,26 @@ export class VapiService {
       this.logger.error(`Failed to persist crisis flag for ${vapiCallId}`, err);
     }
 
-    return { result: { response: CRISIS_RESPONSE } };
+    return CRISIS_RESPONSE;
   }
 
   private async handleDailyAffirmationOptIn(
     vapiCallId: string,
     phone: string,
     params: Record<string, unknown>,
-  ): Promise<unknown> {
+  ): Promise<string> {
     const callerId = await this.resolveCallerIdWithPhone(vapiCallId, phone);
     if (!callerId) {
-      return { result: 'Noted — I will set that up for you.' };
+      return 'Noted — I will set that up for you.';
     }
 
     const optIn = params['opt_in'] === true;
     await this.callersService.updateCaller(callerId, { daily_affirmation_opt_in: optIn });
 
     this.logger.log(`Daily affirmation ${optIn ? 'opt-in' : 'opt-out'} for call: ${vapiCallId}`);
-    return {
-      result: optIn
-        ? "Done — you'll receive a morning affirmation text every day. Something to start your day with."
-        : 'Daily affirmations turned off.',
-    };
+    return optIn
+      ? "Done — you'll receive a morning affirmation text every day. Something to start your day with."
+      : 'Daily affirmations turned off.';
   }
 
   // ─── Default config (Supabase-unavailable fallback) ─────────────────────────

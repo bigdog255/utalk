@@ -12,6 +12,16 @@ export interface VapiFunctionCall {
   parameters: Record<string, unknown>;
 }
 
+// Newer Vapi tool-calls format (OpenAI-compatible)
+export interface VapiToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string | Record<string, unknown>;
+  };
+}
+
 export interface VapiArtifact {
   messages?: Array<{ role: string; content: string }>;
   transcript?: string;
@@ -34,6 +44,9 @@ export interface VapiMessage {
   type: VapiMessageType;
   call?: VapiCall;
   functionCall?: VapiFunctionCall;
+  toolCalls?: VapiToolCall[];
+  toolCallList?: VapiToolCall[];
+  toolWithToolCallList?: Array<{ toolCall: VapiToolCall }>;
   artifact?: VapiArtifact;
   analysis?: VapiAnalysis;
 }
