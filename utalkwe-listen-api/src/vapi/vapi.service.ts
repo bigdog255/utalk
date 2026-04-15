@@ -525,13 +525,18 @@ export class VapiService {
       // Fetch session state before update (was_crisis may have been set by handleFlagCrisis)
       const currentSession = await this.callersService.getSessionByVapiCallId(vapiCallId);
 
-      const summary =
-        message.analysis?.summary ??
+      // Build full transcript for name extraction + summary
+      const fullTranscript =
         message.artifact?.messages
           ?.map(m => `${m.role}: ${m.content}`)
-          .join('\n')
-          .slice(0, 1000) ??
-        null;
+          .join('\n') ?? '';
+
+      const summary =
+        message.analysis?.summary ??
+        (fullTranscript ? fullTranscript.slice(0, 1000) : null);
+
+      // BACKUP: if save_caller_name never fired, extract name from transcript
+      await this.backfillNameFromTranscript(callerId, fullTranscript);
 
       const durationSeconds = currentSession?.started_at
         ? Math.round((Date.now() - new Date(currentSession.started_at).getTime()) / 1000)
@@ -579,6 +584,70 @@ export class VapiService {
       this.logger.log(`Post-call complete: ${vapiCallId}`);
     } catch (err) {
       this.logger.error(`Post-call failed for ${vapiCallId}`, err);
+    }
+  }
+
+  /**
+   * Backup: if save_caller_name never fired during the call, try to extract
+   * the caller's name from the transcript and save it.
+   */
+  private async backfillNameFromTranscript(callerId: string, transcript: string): Promise<void> {
+    if (!transcript) return;
+
+    try {
+      const caller = await this.callersService.findById(callerId);
+      if (caller?.name) return; // already have a name — nothing to do
+
+      // Find the user turn immediately after Haven asks for the name
+      // Common patterns: "my name is X", "I'm X", "It's X", or just "X" as a response
+      const lines = transcript.split('\n');
+      let name: string | null = null;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line) continue;
+
+        // Look for "user:" lines containing a name introduction
+        if (line.toLowerCase().startsWith('user:')) {
+          const content = line.slice(5).trim();
+
+          // Pattern 1: "my name is X" or "I'm X" or "I am X" or "this is X"
+          const introMatch = /(?:my name is|i'm|i am|this is|it's|its|call me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i.exec(content);
+          if (introMatch) {
+            name = introMatch[1].trim();
+            break;
+          }
+        }
+
+        // Alternatively: look for Haven asking then user's next line being a short proper-noun response
+        if (line.toLowerCase().includes('what\'s your name') || line.toLowerCase().includes('what is your name')) {
+          // Next user line is likely just the name
+          for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
+            const nextLine = lines[j];
+            if (nextLine?.toLowerCase().startsWith('user:')) {
+              const content = nextLine.slice(5).trim();
+              // Single-word or two-word capitalized response = likely a name
+              const bareMatch = /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\.?$/.exec(content);
+              if (bareMatch) {
+                name = bareMatch[1].trim();
+                break;
+              }
+            }
+          }
+          if (name) break;
+        }
+      }
+
+      if (name) {
+        // Clean up: first name only, reasonable length
+        const cleanName = name.split(/\s+/)[0];
+        if (cleanName.length >= 2 && cleanName.length <= 30) {
+          await this.callersService.updateCaller(callerId, { name: cleanName });
+          this.logger.log(`backfillNameFromTranscript: saved "${cleanName}" for callerId=${callerId}`);
+        }
+      }
+    } catch (err) {
+      this.logger.error('backfillNameFromTranscript failed', err);
     }
   }
 
@@ -639,15 +708,19 @@ export class VapiService {
     const fnName = message.functionCall?.name;
     const params = message.functionCall?.parameters ?? {};
     const vapiCallId = message.call?.id ?? '';
+    const rawPhone = message.call?.customer?.number ?? '';
+    const phone = rawPhone ? this.callersService.normalizePhone(rawPhone) : '';
 
-    this.logger.log(`Function call: ${fnName ?? 'unknown'}`);
+    this.logger.log(
+      `Function call: ${fnName ?? 'unknown'} vapiCallId=${vapiCallId} phone=${phone || 'EMPTY'}`,
+    );
 
     try {
       if (fnName === 'save_caller_name') {
-        return await this.handleSaveCallerName(vapiCallId, params);
+        return await this.handleSaveCallerName(vapiCallId, phone, params);
       }
       if (fnName === 'save_preferences') {
-        return await this.handleSavePreferences(vapiCallId, params);
+        return await this.handleSavePreferences(vapiCallId, phone, params);
       }
       if (fnName === 'request_coaching_plan') {
         return await this.handleRequestCoachingPlan(vapiCallId, params);
@@ -656,7 +729,7 @@ export class VapiService {
         return await this.handleFlagCrisis(vapiCallId, params);
       }
       if (fnName === 'opt_in_daily_affirmation') {
-        return await this.handleDailyAffirmationOptIn(vapiCallId, params);
+        return await this.handleDailyAffirmationOptIn(vapiCallId, phone, params);
       }
 
       this.logger.warn(`Unhandled function call: ${fnName}`);
@@ -667,24 +740,59 @@ export class VapiService {
     }
   }
 
-  private async handleSaveCallerName(
-    vapiCallId: string,
-    params: Record<string, unknown>,
-  ): Promise<unknown> {
-    const callerId = await this.resolveCallerId(vapiCallId);
-    if (!callerId) {
-      this.logger.warn(`save_caller_name: could not resolve callerId for ${vapiCallId}`);
-      return { result: 'Name noted.' };
+  /** Resolve callerId using every available strategy */
+  private async resolveCallerIdWithPhone(vapiCallId: string, phone: string): Promise<string | null> {
+    // Strategy 1: in-memory map
+    const cached = this.activeCalls.get(vapiCallId);
+    if (cached) return cached;
+
+    // Strategy 2: DB session lookup
+    const session = await this.callersService.getSessionByVapiCallId(vapiCallId);
+    if (session) {
+      this.activeCalls.set(vapiCallId, session.caller_id);
+      this.logger.log(`resolveCallerIdWithPhone: recovered from session DB`);
+      return session.caller_id;
     }
 
+    // Strategy 3: phone number lookup (last resort)
+    if (phone) {
+      const caller = await this.callersService.findByPhone(phone);
+      if (caller) {
+        this.activeCalls.set(vapiCallId, caller.id);
+        this.logger.log(`resolveCallerIdWithPhone: recovered from phone lookup`);
+        return caller.id;
+      }
+    }
+
+    this.logger.error(`resolveCallerIdWithPhone: ALL strategies failed for ${vapiCallId}`);
+    return null;
+  }
+
+  private async handleSaveCallerName(
+    vapiCallId: string,
+    phone: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
     const raw = params['name'];
     const name = typeof raw === 'string' ? raw.trim() : '';
     if (!name) {
+      this.logger.warn(`save_caller_name: no name in params`);
       return { result: 'Could not save name — continuing conversation.' };
     }
 
-    await this.callersService.updateCaller(callerId, { name });
-    this.logger.log(`Name saved for call: ${vapiCallId}`);
+    const callerId = await this.resolveCallerIdWithPhone(vapiCallId, phone);
+    if (!callerId) {
+      this.logger.error(`save_caller_name: CANNOT resolve callerId for ${vapiCallId} — name "${name}" NOT saved`);
+      return { result: `Nice to meet you, ${name}.` };
+    }
+
+    try {
+      const updated = await this.callersService.updateCaller(callerId, { name });
+      this.logger.log(`save_caller_name: SAVED "${name}" for callerId=${callerId} (result name=${updated.name})`);
+    } catch (err) {
+      this.logger.error(`save_caller_name: DB update failed for callerId=${callerId}`, err);
+    }
+
     return { result: `Name saved: ${name}. Use their name warmly in conversation.` };
   }
 
@@ -708,9 +816,10 @@ export class VapiService {
 
   private async handleSavePreferences(
     vapiCallId: string,
+    phone: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const callerId = await this.resolveCallerId(vapiCallId);
+    const callerId = await this.resolveCallerIdWithPhone(vapiCallId, phone);
     if (!callerId) {
       this.logger.warn(`save_preferences: could not resolve callerId for ${vapiCallId}`);
       return { result: 'Preferences noted.' };
@@ -749,9 +858,10 @@ export class VapiService {
 
   private async handleDailyAffirmationOptIn(
     vapiCallId: string,
+    phone: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const callerId = await this.resolveCallerId(vapiCallId);
+    const callerId = await this.resolveCallerIdWithPhone(vapiCallId, phone);
     if (!callerId) {
       return { result: 'Noted — I will set that up for you.' };
     }
