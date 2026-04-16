@@ -236,16 +236,21 @@ export class VapiService {
 
     const response: any = {
       assistant: {
+        name: 'Haven',
         firstMessage,
         model: {
           provider: 'openai',
           model: 'gpt-4o',
           messages: [{ role: 'system', content: this.buildSystemPrompt(ctx) }],
+          tools: this.getDefaultTools(),
         },
+        voice: { provider: 'openai', voiceId: 'nova' },
+        maxDurationSeconds: this.getMaxDuration(caller.subscription_tier),
+        silenceTimeoutSeconds: 120,
       },
     };
 
-    this.logger.log(`=== MINIMAL RESPONSE === ${JSON.stringify(response).slice(0, 300)}`);
+    this.logger.log(`=== RESPONSE === keys=${JSON.stringify(Object.keys(response.assistant))}`);
     return response;
   }
 
