@@ -204,6 +204,7 @@ export class VapiService {
       this.logger.log(
         `assistant-request ${this.callersService.maskPhone(phone)} — ${Date.now() - start}ms`,
       );
+      this.logger.log(`=== RESPONSE KEYS === ${JSON.stringify(Object.keys(assistantConfig.assistant))}`);
       return assistantConfig;
     } catch (err) {
       // NFR8: degrade gracefully — never fail the call due to DB unavailability
@@ -233,18 +234,16 @@ export class VapiService {
     );
     this.logger.log(`=== firstMessage === "${firstMessage}"`);
 
-    // serverUrl tells Vapi where to send function-call webhooks (no secret — avoids header errors)
     const serverUrl = this.config.get<string>('SERVER_URL');
 
-    return {
+    const response = {
       assistant: {
         name: 'Haven',
         firstMessage,
-        firstMessageMode: 'assistant-speaks-first',
         model: {
-          provider: 'anthropic',
-          model: 'claude-3-5-sonnet-20241022',
-          messages: [{ role: 'system', content: this.buildSystemPrompt(ctx) }],
+          provider: 'openai' as const,
+          model: 'gpt-4o',
+          messages: [{ role: 'system' as const, content: this.buildSystemPrompt(ctx) }],
           tools: this.getDefaultTools(),
         },
         voice: this.getVoiceConfig(ctx),
@@ -255,6 +254,9 @@ export class VapiService {
         backgroundDenoisingEnabled: false,
       },
     };
+
+    this.logger.log(`=== FULL RESPONSE === ${JSON.stringify(response).slice(0, 500)}`);
+    return response;
   }
 
   // ─── Story 6.2: Limit-reached response ──────────────────────────────────────
