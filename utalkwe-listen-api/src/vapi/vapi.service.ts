@@ -234,28 +234,18 @@ export class VapiService {
     );
     this.logger.log(`=== firstMessage === "${firstMessage}"`);
 
-    const serverUrl = this.config.get<string>('SERVER_URL');
-
-    const response = {
+    const response: any = {
       assistant: {
-        name: 'Haven',
         firstMessage,
         model: {
-          provider: 'openai' as const,
+          provider: 'openai',
           model: 'gpt-4o',
-          messages: [{ role: 'system' as const, content: this.buildSystemPrompt(ctx) }],
-          tools: this.getDefaultTools(),
+          messages: [{ role: 'system', content: this.buildSystemPrompt(ctx) }],
         },
-        voice: this.getVoiceConfig(ctx),
-        ...(serverUrl && { serverUrl: `${serverUrl}/vapi/webhook` }),
-        maxDurationSeconds: this.getMaxDuration(caller.subscription_tier),
-        silenceTimeoutSeconds: 120,
-        endCallFunctionEnabled: false,
-        backgroundDenoisingEnabled: false,
       },
     };
 
-    this.logger.log(`=== FULL RESPONSE === ${JSON.stringify(response).slice(0, 500)}`);
+    this.logger.log(`=== MINIMAL RESPONSE === ${JSON.stringify(response).slice(0, 300)}`);
     return response;
   }
 
