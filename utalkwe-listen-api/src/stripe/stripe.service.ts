@@ -20,9 +20,8 @@ export class StripeService {
     this.stripe = new Stripe(config.getOrThrow<string>('STRIPE_SECRET_KEY'));
     this.webhookSecret = config.getOrThrow<string>('STRIPE_WEBHOOK_SECRET');
     this.priceToTier = {
-      [config.getOrThrow<string>('STRIPE_PRICE_BASIC')]: 'basic',
-      [config.getOrThrow<string>('STRIPE_PRICE_PREMIUM')]: 'premium',
-      [config.getOrThrow<string>('STRIPE_PRICE_VIP')]: 'vip',
+      [config.getOrThrow<string>('STRIPE_PRICE_PER_MINUTE')]: 'per_minute',
+      [config.getOrThrow<string>('STRIPE_PRICE_UNLIMITED')]: 'unlimited',
     };
   }
 
@@ -139,7 +138,6 @@ export class StripeService {
   // ─── invoice.payment_failed ──────────────────────────────────────────────────
 
   private async onPaymentFailed(invoice: Stripe.Invoice): Promise<void> {
-    // FR54: past_due does NOT immediately revoke access — tier stays the same
     const stripeSubscriptionId = this.resolveId(invoice.subscription);
     if (!stripeSubscriptionId) return;
 
@@ -160,7 +158,8 @@ export class StripeService {
       const tier = this.priceToTier[priceId];
       if (tier) return tier;
     }
-    return 'basic';
+    // Default to per_minute if price not recognized
+    return 'per_minute';
   }
 
   private resolveId(obj: string | { id: string } | null | undefined): string | null {
