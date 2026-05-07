@@ -1,5 +1,5 @@
 export type GuidanceType = 'faith' | 'general' | 'both';
-export type SubscriptionTier = 'free' | 'basic' | 'premium' | 'vip';
+export type SubscriptionTier = 'free' | 'per_minute' | 'unlimited';
 
 export interface Caller {
   id: string;
@@ -42,15 +42,23 @@ export interface CallerContext {
 export interface AccessCheckResult {
   allowed: boolean;
   tier: SubscriptionTier;
-  reason?: 'free_limit_reached';
+  reason?: 'free_limit_reached' | 'free_minutes_exhausted';
 }
 
-export type CallerUpdate = Partial<
-  Pick<Caller, 'name' | 'guidance_type' | 'preferred_voice' | 'subscription_tier' | 'stripe_customer_id' | 'daily_affirmation_opt_in'>
+export type CallerUpdate = Partial
+  Pick
+    Caller,
+    | 'name'
+    | 'guidance_type'
+    | 'preferred_voice'
+    | 'subscription_tier'
+    | 'stripe_customer_id'
+    | 'daily_affirmation_opt_in'
+  >
 >;
 
-export type SessionUpdate = Partial<
-  Pick<
+export type SessionUpdate = Partial
+  Pick
     CallSession,
     | 'ended_at'
     | 'duration_seconds'
