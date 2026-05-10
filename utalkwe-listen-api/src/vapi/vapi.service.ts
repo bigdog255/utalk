@@ -11,21 +11,21 @@ import type {
   AssistantVoice,
   VapiMessage,
 } from './vapi.types';
-
+ 
 const HAVEN_AI_DISCLOSURE = "I'm Haven — an AI guidance service, not a licensed counselor.";
-
+ 
 const HAVEN_BASE_PERSONA = `You are Haven, an AI guidance service — not a licensed counselor or therapist.
-
+ 
 WHO YOU ARE:
 You are calm, grounded, direct, and wise. You hold space without rushing to fix. You listen before you speak.
-
+ 
 CONVERSATION STYLE:
 - Use short sentences. Speak naturally — this is a phone call, not a chat window.
 - Never interrupt or talk over the caller.
 - Do not use filler affirmations: never say "Absolutely!", "Great question!", "Of course!", "Certainly!", or "I understand completely".
 - Do not over-validate. One acknowledgment is enough.
 - Mirror the caller's emotional register — if they are quiet, be quiet. If they are direct, be direct.
-
+ 
 KEEPING THE CONVERSATION ALIVE (CRITICAL):
 You MUST keep the caller engaged. Silence kills the call — if no one speaks, the call disconnects.
 - ALWAYS end your responses with a question or a gentle prompt. Never leave dead air.
@@ -45,32 +45,32 @@ You MUST keep the caller engaged. Silence kills the call — if no one speaks, t
 - After the caller shares their name, immediately transition into the conversation:
   "It's good to meet you, [name]. So tell me — what's going on? What brought you here tonight?"
 - NEVER just say "thank you" or "nice to meet you" and stop. Always follow up with a question.
-
+ 
 RESPONSE STRUCTURE (follow this every time):
 1. Acknowledge what the caller said — make them feel heard, not processed.
 2. Reflect back the core of what you heard before offering anything.
 3. Only then offer a question, a reframe, or a practical step.
 4. ALWAYS end with a question or prompt to keep the caller talking.
 5. Never lead with advice. Empathy first, always.
-
+ 
 NAME SAVING:
 Early in the conversation, if you don't already know the caller's name, ask: "Before we get started — what's your name?"
 When they share their name, call save_caller_name immediately with their name.
 Use their name naturally in conversation — not every sentence, just where it feels warm and human.
-
+ 
 RETURNING CALLERS:
 If the caller profile shows previous sessions, you REMEMBER them. Act like it.
-
+ 
 Your opening question on a returning call is ALWAYS:
 "Hi [first name], it's good to hear from you again. Would you like to continue our conversation, or talk about something else?"
-
+ 
 Then listen to their answer:
 - If they say "continue" (or anything meaning yes, pick up where we left off):
   Reference the last issue from their profile. Example: "Okay — last time we talked about [last issue]. Where are you with that now?"
 - If they say "something else" (or anything meaning a new topic):
   Warmly invite the new topic. Example: "Of course. What's on your mind tonight?"
 - If they're unsure, gently offer both: "No rush. We can pick up where we left off, or start somewhere new — whichever feels right."
-
+ 
 Throughout the call:
 - Reference past conversations naturally when it fits: "Last time you mentioned…" or "I remember you said…"
 - Ask about progress: "How has that situation been going since we last talked?"
@@ -78,25 +78,25 @@ Throughout the call:
 - Do NOT re-introduce yourself or explain what you do. They already know.
 - Do NOT re-ask their name. You already know it — use it.
 - Treat them like someone returning to a trusted friend — warmth without formality.
-
+ 
 COACHING PLAN:
 Before wrapping up, always offer:
 "Before we go — I'd like to send you a short text with some reflection and a few next steps from what we talked about today. Would that be alright?"
 If they say yes, call request_coaching_plan with the issue category, a 1–2 sentence summary, and their mood.
 If they decline, that's fine — move to closing.
 Do not skip this offer. Every caller deserves a takeaway.
-
-DAILY AFFIRMATIONS (subscribed users only):
-If the caller's profile shows a paid subscription (basic, premium, or vip), offer daily affirmations:
+ 
+DAILY AFFIRMATIONS (paid subscribers only):
+If the caller's profile shows a paid subscription (per_minute or unlimited), offer daily affirmations:
 "One more thing — as part of your plan, I can send you a short affirmation text every morning to start your day. Would you like that?"
 If they say yes, call opt_in_daily_affirmation with opt_in=true.
 If they say no, respect it and move on.
 Do NOT offer this to free-tier callers.
-
+ 
 CLOSING:
 When the caller signals they are done, acknowledge them warmly and wish them well. Keep it brief and genuine.
 Do not create dependency. Do not promise to solve anything.`;
-
+ 
 const GUIDANCE_DETECTION_INSTRUCTIONS = `
 GUIDANCE PREFERENCE DETECTION:
 Listen for signals about whether this caller wants faith-based or general guidance.
@@ -104,13 +104,12 @@ Listen for signals about whether this caller wants faith-based or general guidan
 - Secular signals: explicitly says no religion, not religious, doesn't believe — call save_preferences with guidance_type='general'
 - Ambiguous or unclear: default to 'general' — do NOT guess toward faith
 - Call save_preferences once you have a confident read, not before.
-
+ 
 When you detect faith signals, IMMEDIATELY shift into faith-based mode for the rest of the call:
 - Begin weaving in relevant scripture naturally.
 - You do not need to wait for the preference to be saved — if they mention God, they want you to meet them there.
 - If mid-conversation they reference faith, you can say: "I hear that faith is important to you — can I share something that might speak to this?"`;
-
-
+ 
 const FAITH_GUIDANCE_INSTRUCTIONS = `
 WISDOM DELIVERY — FAITH:
 This caller prefers faith-based guidance. Weave scripture and spiritual wisdom throughout the conversation — not just once at the end.
@@ -124,7 +123,7 @@ This caller prefers faith-based guidance. Weave scripture and spiritual wisdom t
 - If they feel lost: Jeremiah 29:11, Psalm 23, the shepherd who leaves the 99.
 - Close the call with a brief blessing or prayer-like encouragement: "I'm going to leave you with this…"
 Practical steps should complement the faith framing, never replace it.`;
-
+ 
 const GENERAL_GUIDANCE_INSTRUCTIONS = `
 WISDOM DELIVERY — GENERAL:
 This caller prefers general guidance without religious content.
@@ -132,43 +131,41 @@ Draw from philosophy, stoicism, psychology, and practical steps. Keep wisdom gro
 Near the end of the call, you may offer one optional reference with this framing:
 "There's something I'd like to leave you with — you can take it or leave it."
 Then offer a philosophical quote or a practical anchor — not a scripture verse.`;
-
+ 
 const PAID_MAX_SECONDS = 2700; // 45 minutes for paid tiers
-
+ 
 @Injectable()
 export class VapiService {
   private readonly logger = new Logger(VapiService.name);
   // vapiCallId → callerId; in-memory — Supabase fallback in processPostCall handles restarts
   private readonly activeCalls = new Map<string, string>();
-
+ 
   constructor(
     private readonly callersService: CallersService,
     private readonly coachingService: CoachingService,
     private readonly smsService: SmsService,
     private readonly config: ConfigService,
   ) {}
-
+ 
   // ─── Resolve callerId — in-memory map first, then DB fallback ───────────────
-
+ 
   private async resolveCallerId(vapiCallId: string): Promise<string | null> {
-    // Fast path: in-memory map
     const cached = this.activeCalls.get(vapiCallId);
     if (cached) return cached;
-
-    // DB fallback: look up the session (handles process restarts / redeploys)
+ 
     const session = await this.callersService.getSessionByVapiCallId(vapiCallId);
     if (session) {
       this.activeCalls.set(vapiCallId, session.caller_id);
       this.logger.log(`resolveCallerId: recovered ${vapiCallId} from DB`);
       return session.caller_id;
     }
-
+ 
     this.logger.warn(`resolveCallerId: no callerId found for ${vapiCallId}`);
     return null;
   }
-
+ 
   // ─── assistant-request ──────────────────────────────────────────────────────
-
+ 
   async buildDynamicAssistant(
     phone: string,
     vapiCallId: string,
@@ -177,21 +174,18 @@ export class VapiService {
       this.logger.warn('assistant-request with no phone — using default config');
       return this.getDefaultAssistantConfig();
     }
-
+ 
     try {
       const start = Date.now();
       const ctx = await this.callersService.getOrCreateCallerContext(phone);
-
-      // Store callerId so onCallStart can create the session without a second DB lookup
+ 
       this.activeCalls.set(vapiCallId, ctx.caller.id);
-
-      // Story 6.1: enforce subscription access before any conversation begins
+ 
       const access = await this.callersService.canAccessCall(ctx.caller.id);
       if (!access.allowed) {
         this.logger.log(
           `Access denied (${access.reason}) — ${this.callersService.maskPhone(phone)}`,
         );
-        // Story 6.2: send upgrade SMS (service communication — no TCPA consent needed)
         setImmediate(() =>
           this.smsService
             .sendUpgradePrompt(ctx.caller.id, phone, ctx.caller.name)
@@ -199,7 +193,7 @@ export class VapiService {
         );
         return this.buildLimitReachedResponse(ctx);
       }
-
+ 
       const assistantConfig = this.buildAssistantFromContext(ctx);
       this.logger.log(
         `assistant-request ${this.callersService.maskPhone(phone)} — ${Date.now() - start}ms`,
@@ -207,33 +201,29 @@ export class VapiService {
       this.logger.log(`=== RESPONSE KEYS === ${JSON.stringify(Object.keys(assistantConfig.assistant))}`);
       return assistantConfig;
     } catch (err) {
-      // NFR8: degrade gracefully — never fail the call due to DB unavailability
       this.logger.error('Supabase lookup failed in assistant-request — using default config', err);
       return this.getDefaultAssistantConfig();
     }
   }
-
+ 
   private buildAssistantFromContext(ctx: CallerContext): AssistantRequestResponse {
     const { caller, recentSessions, isFirstCall } = ctx;
     const lastSession = recentSessions[0];
-
-    // Get first name only (in case caller.name is "John Smith")
+ 
     const firstName = caller.name ? caller.name.trim().split(/\s+/)[0] : null;
-
+ 
     let firstMessage: string;
     if (isFirstCall || !caller.name) {
-      // Brand new caller OR we have their number but never got a name
       firstMessage = `Welcome to UtalkWe Listen. ${HAVEN_AI_DISCLOSURE} I'm here to listen. Before we get started — what's your name?`;
     } else {
-      // Returning caller — we know their name. Use exact phrasing.
       firstMessage = `Hi ${firstName}, it's good to hear from you again. Would you like to continue our conversation, or talk about something else?`;
     }
-
+ 
     this.logger.log(
       `=== GREETING DECISION === isFirstCall=${isFirstCall} caller.name="${caller.name ?? 'NULL'}" firstName="${firstName ?? 'NONE'}" phone=${this.callersService.maskPhone(caller.phone)} callCount=${caller.call_count} sessions=${recentSessions.length}`,
     );
     this.logger.log(`=== firstMessage === "${firstMessage}"`);
-
+ 
     const response: any = {
       assistant: {
         name: 'Haven',
@@ -249,23 +239,23 @@ export class VapiService {
         silenceTimeoutSeconds: 120,
       },
     };
-
+ 
     this.logger.log(`=== RESPONSE === keys=${JSON.stringify(Object.keys(response.assistant))}`);
     return response;
   }
-
-  // ─── Story 6.2: Limit-reached response ──────────────────────────────────────
-
+ 
+  // ─── Limit-reached response ──────────────────────────────────────────────────
+ 
   private buildLimitReachedResponse(ctx: CallerContext): AssistantRequestResponse {
     const { caller } = ctx;
     const nameClause = caller.name ? `, ${caller.name}` : '';
     const firstMessage =
       `Hey${nameClause}, good to hear from you. I want to be upfront — ` +
-      "you've used your free calls for this month. " +
+      "you've used your 10 free minutes for this month. " +
       "I just sent you a text with options to continue. " +
       "I'm sorry I can't be fully here tonight, but you're not alone — " +
       "reach back out when you're ready.";
-
+ 
     return {
       assistant: {
         name: 'Haven',
@@ -273,12 +263,11 @@ export class VapiService {
         model: {
           provider: 'anthropic',
           model: 'claude-3-5-sonnet-20241022',
-          // Minimal system prompt — Haven should not engage further after the limit message
           messages: [
             {
               role: 'system',
               content:
-                'You have just delivered a message to the caller about their monthly limit. ' +
+                'You have just delivered a message to the caller about their monthly free minute limit. ' +
                 'Do not engage further. The call will end shortly.',
             },
           ],
@@ -291,31 +280,29 @@ export class VapiService {
       },
     };
   }
-
-  // ─── Story 3.1: Voice auto-selection ────────────────────────────────────────
-
+ 
+  // ─── Voice auto-selection ────────────────────────────────────────────────────
+ 
   getVoiceConfig(ctx: CallerContext): AssistantVoice {
-    // Map stored preference to OpenAI voice IDs (no credentials required)
-    // jennifer → nova (warm female), michael → onyx (male)
     const pref = ctx.caller.preferred_voice;
     const voiceId = pref === 'michael' ? 'onyx' : 'nova';
     return { provider: 'openai', voiceId };
   }
-
-  // ─── Story 3.2: Guidance-aware system prompt ────────────────────────────────
-
+ 
+  // ─── Guidance-aware system prompt ───────────────────────────────────────────
+ 
   buildSystemPrompt(ctx: CallerContext): string {
     const { caller, isFirstCall } = ctx;
     const memoryBlock = this.callersService.buildSystemPromptContext(ctx);
-
+ 
     const guidanceInstructions = this.getGuidanceInstructions(
       caller.guidance_type,
       isFirstCall,
     );
-
+ 
     return [HAVEN_BASE_PERSONA, guidanceInstructions, '', memoryBlock].join('\n');
   }
-
+ 
   private getGuidanceInstructions(
     guidanceType: GuidanceType | null,
     isFirstCall: boolean,
@@ -328,9 +315,9 @@ export class VapiService {
     }
     return GENERAL_GUIDANCE_INSTRUCTIONS;
   }
-
-  // ─── Story 3.2: Tool definitions ────────────────────────────────────────────
-
+ 
+  // ─── Tool definitions ────────────────────────────────────────────────────────
+ 
   getDefaultTools(): AssistantTool[] {
     return [
       {
@@ -431,7 +418,7 @@ export class VapiService {
         function: {
           name: 'opt_in_daily_affirmation',
           description:
-            'Opt the caller in to receive a daily morning affirmation text. Call this when a subscribed caller says yes to daily affirmations.',
+            'Opt the caller in to receive a daily morning affirmation text. Call this when a paid subscriber says yes to daily affirmations.',
           parameters: {
             type: 'object',
             properties: {
@@ -446,9 +433,9 @@ export class VapiService {
       },
     ];
   }
-
-  // ─── Story 3.3: Tier-aware duration ─────────────────────────────────────────
-
+ 
+  // ─── Tier-aware duration ─────────────────────────────────────────────────────
+ 
   getMaxDuration(tier: SubscriptionTier): number {
     if (tier === 'free') {
       const minutes = Number.parseInt(
@@ -457,17 +444,17 @@ export class VapiService {
       );
       return minutes * 60;
     }
+    // per_minute and unlimited both get 45 minutes max
     return PAID_MAX_SECONDS;
   }
-
+ 
   // ─── call-start ─────────────────────────────────────────────────────────────
-
+ 
   async onCallStart(phone: string, vapiCallId: string): Promise<void> {
     try {
       let callerId = this.activeCalls.get(vapiCallId);
-
+ 
       if (!callerId) {
-        // Fallback: look up by phone if assistant-request didn't populate the map
         const caller = await this.callersService.findByPhone(phone);
         if (!caller) {
           this.logger.warn(`call-start: no caller for ${this.callersService.maskPhone(phone)}`);
@@ -476,32 +463,31 @@ export class VapiService {
         callerId = caller.id;
         this.activeCalls.set(vapiCallId, callerId);
       }
-
+ 
       await this.callersService.createSession(callerId, vapiCallId);
       this.logger.log(`Session created: ${vapiCallId}`);
     } catch (err) {
       this.logger.error(`onCallStart failed for ${vapiCallId}`, err);
     }
   }
-
+ 
   // ─── end-of-call-report ─────────────────────────────────────────────────────
-
+ 
   async onCallEnd(message: VapiMessage): Promise<void> {
     const vapiCallId = message.call?.id ?? '';
     this.logger.log(`Call ended: ${vapiCallId}`);
     setImmediate(() => this.processPostCall(vapiCallId, message));
   }
-
+ 
   private async processPostCall(vapiCallId: string, message: VapiMessage): Promise<void> {
     try {
       const rawPhone = message.call?.customer?.number;
       const callerPhone = rawPhone ? this.callersService.normalizePhone(rawPhone) : '';
-
+ 
       this.logger.log(`processPostCall: vapiCallId=${vapiCallId} rawPhone=${rawPhone ?? 'EMPTY'} normalizedPhone=${callerPhone || 'EMPTY'}`);
-
+ 
       let callerId = await this.resolveCallerId(vapiCallId);
-
-      // Last resort: look up by phone
+ 
       if (!callerId && callerPhone) {
         const caller = await this.callersService.findByPhone(callerPhone);
         if (caller) {
@@ -509,41 +495,38 @@ export class VapiService {
           this.logger.log(`processPostCall: resolved callerId from phone ${this.callersService.maskPhone(callerPhone)}`);
         }
       }
-
+ 
       if (!callerId) {
         this.logger.error(`processPostCall: CANNOT resolve callerId for ${vapiCallId} — no SMS will be sent`);
         return;
       }
-
-      // Fetch session state before update (was_crisis may have been set by handleFlagCrisis)
+ 
       const currentSession = await this.callersService.getSessionByVapiCallId(vapiCallId);
-
-      // Build full transcript for name extraction + summary
+ 
       const fullTranscript =
         message.artifact?.messages
           ?.map(m => `${m.role}: ${m.content}`)
           .join('\n') ?? '';
-
+ 
       const summary =
         message.analysis?.summary ??
         (fullTranscript ? fullTranscript.slice(0, 1000) : null);
-
-      // BACKUP: if save_caller_name never fired, extract name from transcript
+ 
       await this.backfillNameFromTranscript(callerId, fullTranscript);
-
+ 
       const durationSeconds = currentSession?.started_at
         ? Math.round((Date.now() - new Date(currentSession.started_at).getTime()) / 1000)
         : null;
-
+ 
       await this.callersService.updateSession(vapiCallId, {
         ended_at: new Date().toISOString(),
         duration_seconds: durationSeconds,
         full_summary: summary,
       });
-
+ 
       await this.callersService.incrementCallCount(callerId);
       this.activeCalls.delete(vapiCallId);
-
+ 
       if (currentSession?.was_crisis) {
         this.logger.warn(`Post-call crisis path: ${vapiCallId}`);
         if (callerPhone) {
@@ -551,17 +534,15 @@ export class VapiService {
         }
         return;
       }
-
-      // SMS decision
+ 
       this.logger.log(
         `SMS decision: callerPhone=${callerPhone || 'EMPTY'} ` +
         `issue_category=${currentSession?.issue_category ?? 'NONE'} ` +
         `was_crisis=${currentSession?.was_crisis ?? false}`,
       );
-
+ 
       if (!callerPhone) {
         this.logger.error(`NO PHONE NUMBER — cannot send SMS for ${vapiCallId}. Attempting phone lookup from caller record.`);
-        // Last resort: get phone from caller record
         const callerRecord = await this.callersService.findById(callerId);
         if (callerRecord?.phone) {
           const fallbackPhone = callerRecord.phone;
@@ -573,53 +554,41 @@ export class VapiService {
       } else {
         await this.sendPostCallSms(callerId, callerPhone, currentSession, summary);
       }
-
+ 
       this.logger.log(`Post-call complete: ${vapiCallId}`);
     } catch (err) {
       this.logger.error(`Post-call failed for ${vapiCallId}`, err);
     }
   }
-
-  /**
-   * Backup: if save_caller_name never fired during the call, try to extract
-   * the caller's name from the transcript and save it.
-   */
+ 
   private async backfillNameFromTranscript(callerId: string, transcript: string): Promise<void> {
     if (!transcript) return;
-
+ 
     try {
       const caller = await this.callersService.findById(callerId);
-      if (caller?.name) return; // already have a name — nothing to do
-
-      // Find the user turn immediately after Haven asks for the name
-      // Common patterns: "my name is X", "I'm X", "It's X", or just "X" as a response
+      if (caller?.name) return;
+ 
       const lines = transcript.split('\n');
       let name: string | null = null;
-
+ 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (!line) continue;
-
-        // Look for "user:" lines containing a name introduction
+ 
         if (line.toLowerCase().startsWith('user:')) {
           const content = line.slice(5).trim();
-
-          // Pattern 1: "my name is X" or "I'm X" or "I am X" or "this is X"
           const introMatch = /(?:my name is|i'm|i am|this is|it's|its|call me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i.exec(content);
           if (introMatch) {
             name = introMatch[1].trim();
             break;
           }
         }
-
-        // Alternatively: look for Haven asking then user's next line being a short proper-noun response
+ 
         if (line.toLowerCase().includes('what\'s your name') || line.toLowerCase().includes('what is your name')) {
-          // Next user line is likely just the name
           for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
             const nextLine = lines[j];
             if (nextLine?.toLowerCase().startsWith('user:')) {
               const content = nextLine.slice(5).trim();
-              // Single-word or two-word capitalized response = likely a name
               const bareMatch = /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\.?$/.exec(content);
               if (bareMatch) {
                 name = bareMatch[1].trim();
@@ -630,9 +599,8 @@ export class VapiService {
           if (name) break;
         }
       }
-
+ 
       if (name) {
-        // Clean up: first name only, reasonable length
         const cleanName = name.split(/\s+/)[0];
         if (cleanName.length >= 2 && cleanName.length <= 30) {
           await this.callersService.updateCaller(callerId, { name: cleanName });
@@ -643,19 +611,17 @@ export class VapiService {
       this.logger.error('backfillNameFromTranscript failed', err);
     }
   }
-
+ 
   private async sendPostCallSms(
     callerId: string,
     phone: string,
     session: import('../callers/callers.types').CallSession | null,
     summary: string | null,
   ): Promise<void> {
-    // Coaching plan path — only if request_coaching_plan was called (issue_category set)
     if (session?.issue_category) {
       this.logger.log(`Sending coaching plan SMS to ${this.callersService.maskPhone(phone)}`);
       await this.runCoachingPipeline(callerId, phone, session);
     } else {
-      // General follow-up SMS for every substantive call
       this.logger.log(`Sending general follow-up SMS to ${this.callersService.maskPhone(phone)}`);
       const caller = await this.callersService.findById(callerId);
       await this.smsService.sendCallFollowUp(
@@ -666,7 +632,7 @@ export class VapiService {
       );
     }
   }
-
+ 
   private async runCoachingPipeline(
     callerId: string,
     callerPhone: string,
@@ -678,38 +644,36 @@ export class VapiService {
         this.logger.warn(`runCoachingPipeline: caller not found ${callerId}`);
         return;
       }
-
+ 
       const plan = await this.coachingService.generatePlan(caller, session);
       const smsBody = this.coachingService.buildFollowUpSms(plan, caller.name);
-
+ 
       await this.smsService.send(callerId, callerPhone, smsBody, 'follow_up');
-
+ 
       await this.callersService.updateSession(session.vapi_call_id, {
         action_plan_id: plan.id,
         follow_up_sent: true,
       });
-
+ 
       this.logger.log(`Coaching plan delivered for session ${session.id}`);
     } catch (err) {
       this.logger.error(`Coaching pipeline failed for caller ${callerId}`, err);
     }
   }
-
+ 
   // ─── function-call ──────────────────────────────────────────────────────────
-
+ 
   async handleFunctionCall(message: VapiMessage): Promise<unknown> {
     const vapiCallId = message.call?.id ?? '';
     const rawPhone = message.call?.customer?.number ?? '';
     const phone = rawPhone ? this.callersService.normalizePhone(rawPhone) : '';
-
-    // ─── Newer Vapi tool-calls format ─────────────────────────────────────────
-    // Can appear under toolCalls, toolCallList, or toolWithToolCallList
+ 
     const toolCalls =
       message.toolCallList ??
       message.toolCalls ??
       message.toolWithToolCallList?.map(t => t.toolCall) ??
       null;
-
+ 
     if (toolCalls && toolCalls.length > 0) {
       this.logger.log(`Tool calls received: ${toolCalls.length}`);
       const results = await Promise.all(
@@ -719,26 +683,25 @@ export class VapiService {
             typeof tc.function?.arguments === 'string'
               ? this.safeJsonParse(tc.function.arguments)
               : tc.function?.arguments ?? {};
-
+ 
           this.logger.log(`Tool call: ${fnName} id=${tc.id} args=${JSON.stringify(args)}`);
-
+ 
           const resultString = await this.dispatchFunction(fnName, vapiCallId, phone, args);
           return { toolCallId: tc.id, result: resultString };
         }),
       );
       return { results };
     }
-
-    // ─── Legacy function-call format ──────────────────────────────────────────
+ 
     const fnName = message.functionCall?.name ?? 'unknown';
     const params = message.functionCall?.parameters ?? {};
-
+ 
     this.logger.log(`Function call (legacy): ${fnName} vapiCallId=${vapiCallId} phone=${phone || 'EMPTY'}`);
-
+ 
     const resultString = await this.dispatchFunction(fnName, vapiCallId, phone, params);
     return { result: resultString };
   }
-
+ 
   private safeJsonParse(s: string): Record<string, unknown> {
     try {
       return JSON.parse(s) as Record<string, unknown>;
@@ -747,8 +710,7 @@ export class VapiService {
       return {};
     }
   }
-
-  /** Single dispatch point — returns a plain string result */
+ 
   private async dispatchFunction(
     fnName: string,
     vapiCallId: string,
@@ -778,22 +740,18 @@ export class VapiService {
       return 'Function call failed — continuing conversation.';
     }
   }
-
-  /** Resolve callerId using every available strategy */
+ 
   private async resolveCallerIdWithPhone(vapiCallId: string, phone: string): Promise<string | null> {
-    // Strategy 1: in-memory map
     const cached = this.activeCalls.get(vapiCallId);
     if (cached) return cached;
-
-    // Strategy 2: DB session lookup
+ 
     const session = await this.callersService.getSessionByVapiCallId(vapiCallId);
     if (session) {
       this.activeCalls.set(vapiCallId, session.caller_id);
       this.logger.log(`resolveCallerIdWithPhone: recovered from session DB`);
       return session.caller_id;
     }
-
-    // Strategy 3: phone number lookup (last resort)
+ 
     if (phone) {
       const caller = await this.callersService.findByPhone(phone);
       if (caller) {
@@ -802,11 +760,11 @@ export class VapiService {
         return caller.id;
       }
     }
-
+ 
     this.logger.error(`resolveCallerIdWithPhone: ALL strategies failed for ${vapiCallId}`);
     return null;
   }
-
+ 
   private async handleSaveCallerName(
     vapiCallId: string,
     phone: string,
@@ -818,23 +776,23 @@ export class VapiService {
       this.logger.warn(`save_caller_name: no name in params`);
       return 'Could not save name — continuing conversation.';
     }
-
+ 
     const callerId = await this.resolveCallerIdWithPhone(vapiCallId, phone);
     if (!callerId) {
       this.logger.error(`save_caller_name: CANNOT resolve callerId for ${vapiCallId} — name "${name}" NOT saved`);
       return `Nice to meet you, ${name}.`;
     }
-
+ 
     try {
       const updated = await this.callersService.updateCaller(callerId, { name });
       this.logger.log(`save_caller_name: SAVED "${name}" for callerId=${callerId} (result name=${updated.name})`);
     } catch (err) {
       this.logger.error(`save_caller_name: DB update failed for callerId=${callerId}`, err);
     }
-
+ 
     return `Name saved: ${name}. Use their name warmly in conversation.`;
   }
-
+ 
   private async handleRequestCoachingPlan(
     vapiCallId: string,
     params: Record<string, unknown>,
@@ -842,17 +800,17 @@ export class VapiService {
     const issueCategory = typeof params['issue_category'] === 'string' ? params['issue_category'] : null;
     const issueSummary = typeof params['issue_summary'] === 'string' ? params['issue_summary'] : null;
     const callerMood = typeof params['mood'] === 'string' ? params['mood'] : null;
-
+ 
     await this.callersService.updateSession(vapiCallId, {
       issue_category: issueCategory,
       issue_summary: issueSummary,
       caller_mood: callerMood,
     });
-
+ 
     this.logger.log(`Coaching plan requested for call: ${vapiCallId}`);
     return 'Got it — I will send you a personalized plan via text after our call.';
   }
-
+ 
   private async handleSavePreferences(
     vapiCallId: string,
     phone: string,
@@ -863,26 +821,26 @@ export class VapiService {
       this.logger.warn(`save_preferences: could not resolve callerId for ${vapiCallId}`);
       return 'Preferences noted.';
     }
-
+ 
     const update: Record<string, unknown> = {};
     if (params['guidance_type']) update['guidance_type'] = params['guidance_type'];
     if (params['preferred_voice']) update['preferred_voice'] = params['preferred_voice'];
-
+ 
     await this.callersService.updateCaller(callerId, update as Parameters<typeof this.callersService.updateCaller>[1]);
-
+ 
     this.logger.log(`Preferences saved for call: ${vapiCallId}`);
     return 'Preferences saved. Continue with the appropriate guidance style.';
   }
-
+ 
   private async handleFlagCrisis(
     vapiCallId: string,
     params: Record<string, unknown>,
   ): Promise<string> {
     const severity = typeof params['severity'] === 'string' ? params['severity'] : 'unknown';
     const indicator = typeof params['indicator'] === 'string' ? params['indicator'] : 'unspecified';
-
+ 
     this.logger.warn(`CRISIS FLAGGED [${severity}]: "${indicator}" — call ${vapiCallId}`);
-
+ 
     try {
       await this.callersService.updateSession(vapiCallId, {
         was_crisis: true,
@@ -891,10 +849,10 @@ export class VapiService {
     } catch (err) {
       this.logger.error(`Failed to persist crisis flag for ${vapiCallId}`, err);
     }
-
+ 
     return CRISIS_RESPONSE;
   }
-
+ 
   private async handleDailyAffirmationOptIn(
     vapiCallId: string,
     phone: string,
@@ -904,18 +862,18 @@ export class VapiService {
     if (!callerId) {
       return 'Noted — I will set that up for you.';
     }
-
+ 
     const optIn = params['opt_in'] === true;
     await this.callersService.updateCaller(callerId, { daily_affirmation_opt_in: optIn });
-
+ 
     this.logger.log(`Daily affirmation ${optIn ? 'opt-in' : 'opt-out'} for call: ${vapiCallId}`);
     return optIn
       ? "Done — you'll receive a morning affirmation text every day. Something to start your day with."
       : 'Daily affirmations turned off.';
   }
-
+ 
   // ─── Default config (Supabase-unavailable fallback) ─────────────────────────
-
+ 
   getDefaultAssistantConfig(): AssistantRequestResponse {
     return {
       assistant: {
